@@ -1,0 +1,41 @@
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.log
+
+# Virtual environments
+.venv/
+venv/
+.ven/
+
+# Raw datasets (these are the multi-GB ones)
+data/raw/**
+!data/raw/.gitkeep  # keep folder structure only
+
+# Processed and outputs
+outputs/
+outputs_test/
+results/
+runs/
+checkpoints/
+artifacts/
+models/
+weights/
+
+# Large model/data formats
+*.pt
+*.pth
+*.onnx
+*.zip
+*.tar
+*.mp4
+*.raw
+*.csv
+
+# IDE/OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
