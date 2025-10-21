@@ -1,0 +1,118 @@
+================================================================================
+DRIVER FATIGUE DETECTION - FEATURE EXTRACTION PIPELINE DEMO
+================================================================================
+Demo Run: 2025-10-10 14:57:32
+
+Pipeline Components:
+1. Facial Landmarks: EAR (eye aspect ratio), MAR (mouth aspect ratio)
+2. Temporal Features: PERCLOS (% eyes closed over time)
+3. Motion & Pose: Head pose estimation (yaw, pitch, roll)
+4. Feature Vector: Combined normalized features for ML model
+
+--------------------------------------------------------------------------------
+
+Randomly Selected 5 Videos for Demo:
+
+1. DSM_Dataset-HDTV720\Yawning\Male\HDTV720\P1042758_720.mp4
+2. DSM_Dataset-HDTV720\Yawning\Male\HDTV720\P1042749_720.mp4
+3. DSM_Dataset-HDTV720\Yawning\Male\HDTV720\P1042799_720.mp4
+4. DSM_Dataset-HDTV720\Yawning\Female\HDTV720\P1043093_720.mp4
+5. DSM_Dataset-HDTV720\Yawning\Male\HDTV720\P1042792_720.mp4
+EXTRACTING FEATURES...
+Video 1/5:
+--------------------------------------------------------------------------------
+   Processing: P1042758_720.mp4
+   FPS: 25.0 | Total Frames: 1080 | Duration: 43.2s
+   Processed 150/150 frames with face detected
+   Avg EAR: 0.366 | Avg MAR: 1.003 | PERCLOS: 0.6%
+   Avg Head Yaw: 29.8° (looking right)
+   High MAR detected - frequent yawning
+   Head pose deviation - possible distraction
+   Fatigue Score: 2/4 - MODERATE RISK
+
+Video 2/5:
+--------------------------------------------------------------------------------
+   Processing: P1042749_720.mp4
+   FPS: 24.0 | Total Frames: 790 | Duration: 32.9s
+   Processed 150/150 frames with face detected
+   Avg EAR: 0.291 | Avg MAR: 0.536 | PERCLOS: 9.9%
+   Avg Head Yaw: -17.6° (looking left)
+   No significant fatigue indicators detected
+
+Video 3/5:
+--------------------------------------------------------------------------------
+   Processing: P1042799_720.mp4
+   FPS: 25.0 | Total Frames: 490 | Duration: 19.6s
+   Processed 150/150 frames with face detected
+   Avg EAR: 0.191 | Avg MAR: 0.400 | PERCLOS: 48.8%
+   Avg Head Yaw: -13.7° (looking left)
+   Low EAR detected - possible drowsiness
+   High PERCLOS - eyes closed 48.8% of time
+   Fatigue Score: 2/4 - MODERATE RISK
+
+Video 4/5:
+--------------------------------------------------------------------------------
+   Processing: P1043093_720.mp4
+   FPS: 25.0 | Total Frames: 572 | Duration: 22.9s
+   Processed 149/150 frames with face detected
+   Avg EAR: 0.234 | Avg MAR: 0.432 | PERCLOS: 7.1%
+   Avg Head Yaw: -5.7° (looking forward)
+   Low EAR detected - possible drowsiness
+   Fatigue Score: 1/4 - LOW RISK
+
+Video 5/5:
+--------------------------------------------------------------------------------
+   Processing: P1042792_720.mp4
+   FPS: 25.0 | Total Frames: 1233 | Duration: 49.3s
+   Processed 150/150 frames with face detected
+   Avg EAR: 0.344 | Avg MAR: 0.423 | PERCLOS: 4.2%
+   Avg Head Yaw: -25.3° (looking left)
+   Head pose deviation - possible distraction
+   Fatigue Score: 1/4 - LOW RISK
+
+
+================================================================================
+DEMO SUMMARY
+================================================================================
+
+Total Videos Processed: 5
+ HIGH RISK: 0
+ MODERATE RISK: 2
+ LOW RISK: 3
+
+Individual Video Results:
+--------------------------------------------------------------------------------
+
+1. P1042758_720.mp4
+   Duration: 43.2s | Frames: 150/150
+   EAR: 0.366 | MAR: 1.003 | PERCLOS: 0.6%
+   Head Yaw: 29.8°
+   Risk Level: MODERATE (Score: 2/4)
+   Warnings: High MAR - frequent yawning, Head pose deviation - possible distraction
+
+2. P1042749_720.mp4
+   Duration: 32.9s | Frames: 150/150
+   EAR: 0.291 | MAR: 0.536 | PERCLOS: 9.9%
+   Head Yaw: -17.6°
+   Risk Level: LOW (Score: 0/4)
+
+3. P1042799_720.mp4
+   Duration: 19.6s | Frames: 150/150
+   EAR: 0.191 | MAR: 0.400 | PERCLOS: 48.8%
+   Head Yaw: -13.7°
+   Risk Level: MODERATE (Score: 2/4)
+   Warnings: Low EAR - possible drowsiness, High PERCLOS - eyes closed 48.8% of time
+
+4. P1043093_720.mp4
+   Duration: 22.9s | Frames: 149/150
+   EAR: 0.234 | MAR: 0.432 | PERCLOS: 7.1%
+   Head Yaw: -5.7°
+   Risk Level: LOW (Score: 1/4)
+   Warnings: Low EAR - possible drowsiness
+
+5. P1042792_720.mp4
+   Duration: 49.3s | Frames: 150/150
+   EAR: 0.344 | MAR: 0.423 | PERCLOS: 4.2%
+   Head Yaw: -25.3°
+   Risk Level: LOW (Score: 1/4)
+   Warnings: Head pose deviation - possible distraction

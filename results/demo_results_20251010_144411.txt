@@ -1,0 +1,14 @@
+================================================================================
+DRIVER FATIGUE DETECTION - FEATURE EXTRACTION PIPELINE DEMO
+================================================================================
+Demo Run: 2025-10-10 14:44:11
+
+Pipeline Components:
+1. Facial Landmarks: EAR (eye aspect ratio), MAR (mouth aspect ratio)
+2. Temporal Features: PERCLOS (% eyes closed over time)
+3. Motion & Pose: Head pose estimation (yaw, pitch, roll)
+4. Feature Vector: Combined normalized features for ML model
+
+--------------------------------------------------------------------------------
+
+No videos found in dataset
