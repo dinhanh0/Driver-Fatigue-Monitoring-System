@@ -1,8 +1,28 @@
-# Raw datasets (these are the multi-GB ones)
-data/raw/**
-!data/raw/.gitkeep  # keep folder structure only
+.DS_Store
+
+__pycache__/
+*.py[cod]
+*.pth
+.ipynb_checkpoints/
+.mypy_cache/
 
 
-# ignore venvs
 .venv/
-source/
+.venv*/
+source/           # (your venv scaffold)
+
+data/raw/
+data/cache/
+data/interim/
+data/processed/windows/
+results/
+checkpoints/
+*.npz
+*.pt
+
+
+*.log
+wandb/
+mlruns/
+
+.vscode/
