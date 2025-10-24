@@ -4,7 +4,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torchvision.models import mobilenet_v3_small
 
-# --------- Temporal Neighborhood Attention (pure PyTorch, no custom CUDA) ----------
+#Temporal Neighborhood Attention
 class TemporalNeighborhoodAttention(nn.Module):
     """
     Attention along the TIME axis only, in a local neighborhood (kernel_size).
@@ -61,7 +61,7 @@ class TemporalNeighborhoodAttention(nn.Module):
         y = self.out_proj(y)
         return y
 
-# --------- Gated Fusion ----------
+#Gated Fusion
 class GatedFusion(nn.Module):
     """
     Fuse two sequences (B,T,C) with a learned gate:
@@ -80,7 +80,7 @@ class GatedFusion(nn.Module):
         g = torch.sigmoid(self.gate(torch.cat([v_, f_], dim=-1)))
         return g * v_ + (1.0 - g) * f_
 
-# --------- Model 2: HM-GRU + TNA + Gated Fusion ----------
+#Model 2: HM-GRU + TNA + Gated Fusion
 class HMGRU_TNA(nn.Module):
     """
     Inputs:
@@ -153,31 +153,24 @@ class HMGRU_TNA(nn.Module):
         B, T, C, H, W = x_video.shape
         # Encode each frame with CNN (flatten BT for speed)
         xv = x_video.view(B*T, C, H, W)
-        with torch.amp.autocast('cuda', enabled=xv.is_cuda):  # ok on CPU too; AMP does nothing there
+        with torch.amp.autocast('cuda', enabled=xv.is_cuda):
             emb = self.backbone(xv)                        # (B*T, vis_embed_dim)
         emb = emb.view(B, T, -1)                           # (B,T,Cv)
-
         # Temporal Neighborhood Attention on visual stream
         emb = self.tna(emb)                                # (B,T,Cv)
-
         # Visual BiGRU
         vis_out, _ = self.vis_gru(emb)                     # (B,T,2*vis_gru_hidden)
-
         # Handcrafted feature stream
         xf = self.feat_proj(x_feats)                       # (B,T,32)
         feat_out, _ = self.feat_gru(xf)                    # (B,T,2*feat_gru_hidden)
-
         # Gated Fusion
         fused = self.fuse(vis_out, feat_out)               # (B,T,fuse_dim)
-
         # Post-fusion BiGRU
         z, _ = self.post_gru(fused)                        # (B,T,2*post_gru_hidden)
-
         # Temporal pooling (mean + max)
         z_mean = z.mean(dim=1)
         z_max, _ = z.max(dim=1)
         z_cat = torch.cat([z_mean, z_max], dim=-1)
-
         # Head
         z_cat = self.dropout(z_cat)
         logits = self.cls(z_cat)                           # (B,num_classes)
