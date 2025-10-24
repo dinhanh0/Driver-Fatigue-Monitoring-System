@@ -29,6 +29,7 @@ def _windows(n, win, stride):
 # ---------------------------------------------
 # Label mapping (string → int) and utility
 # ---------------------------------------------
+
 LABEL_TO_INT = {
     "microsleep": 0,
     "yawning": 1,
@@ -41,15 +42,29 @@ LABEL_TO_INT = {
     "unknown": 7,
 }
 
+def _normalize_label_name(v) -> str:
+    """Normalize free-form labels to a canonical name used by LABEL_TO_INT."""
+    if v is None:
+        return "unknown"
+    s = str(v).strip().lower()
+    # unify separators
+    s = s.replace("_", " ").replace("-", " ")
+    # collapse repeated whitespace
+    s = " ".join(s.split())
+    # synonyms
+    if s in {"non drowsy", "awake", "alert", "normal"}:
+        return "normal"
+    if s in {"drowsy", "sleepy"}:
+        return "drowsy"
+    return s
+
 
 def _coerce_label(v) -> int:
     try:
         # Already an int-like label
         return int(v)
     except Exception:
-        if v is None:
-            return LABEL_TO_INT["unknown"]
-        s = str(v).strip().lower()
+        s = _normalize_label_name(v)
         return LABEL_TO_INT.get(s, LABEL_TO_INT["unknown"])
 
 # ---------------------------------------------
@@ -334,6 +349,16 @@ def build_windows(index_csv: Path, out_dir: Path, win_sec: float, stride_sec: fl
                 })
             except Exception:
                 segs.append({"f_start": 0, "f_end": 0, "label": "unknown"})
+        # Default label from CSV (after normalization)
+        def_label = int(row0.get("default_label", LABEL_TO_INT["unknown"]))
+        # If still unknown, fall back to hints in the path (helps datasets like DDD)
+        if def_label == LABEL_TO_INT["unknown"]:
+            pl = str(path).lower().replace("_", " ").replace("-", " ")
+            if any(k in pl for k in ("non drowsy", "awake", "alert", "normal")):
+                def_label = LABEL_TO_INT["normal"]
+            elif any(k in pl for k in ("drowsy", "sleep")):
+                def_label = LABEL_TO_INT["drowsy"]
+
         tasks.append({
             "split": split,
             "key": key,
@@ -343,7 +368,7 @@ def build_windows(index_csv: Path, out_dir: Path, win_sec: float, stride_sec: fl
             "win_len": win_len,
             "stride": stride,
             "segs": segs,
-            "default_label": int(row0.get("default_label", LABEL_TO_INT["unknown"])),
+            "default_label": def_label,
             "img_size": int(img_size),
             "sample_rate": int(sample_rate),
             "out_dir": str(out_dir),
