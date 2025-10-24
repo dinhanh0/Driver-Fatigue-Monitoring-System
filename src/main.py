@@ -500,10 +500,36 @@ def _orchestrate(args=None):
 		demo_feature_extraction()
 
 	if parsed.train:
-		print('[ORCH] Launching training (via subprocess)...')
+		print('[ORCH] Launching training for Model 1 (ResNet-18 + LSTM + NAT)...')
 		import subprocess
-		# Use module invocation to ensure correct path handling on Windows
-		cmd = ['python', '-u', '-m', 'src.train', '--splits_csv', str(project_data_dir / 'processed' / 'dataset_index.csv'), '--out_dir', 'outputs', '--epochs', '5']
+		import sys
+		# Determine which windows directory to use (prefer windows_bench_mp if it exists)
+		windows_dir = project_data_dir / 'processed' / 'windows_bench_mp'
+		if not windows_dir.exists():
+			windows_dir = project_data_dir / 'processed' / 'windows_bench_serial'
+		if not windows_dir.exists():
+			windows_dir = project_data_dir / 'processed' / 'windows'
+		
+		print(f'[ORCH] Using windows directory: {windows_dir}')
+		
+		# Use module invocation to ensure correct path handling
+		cmd = [
+			sys.executable, '-u', '-m', 'src.train',
+			'--splits_csv', str(project_data_dir / 'processed' / 'dataset_index.csv'),
+			'--out_dir', 'outputs',
+			'--epochs', '10',
+			'--batch_size', '2',  # Reduced batch size for stability
+			'--lr', '1e-4',
+			'--num_classes', '8',  # 8 classes from LABEL_TO_INT mapping
+			'--seq_len', '40',  # Match average window length (~38 frames)
+			'--img_size', '224',
+			'--backbone', 'resnet18',
+			'--use_nat',  # Enable Neighborhood Attention
+			'--nat_kernel', '7',
+			'--nat_blocks', '2',
+			'--num_workers', '0'  # Use 0 workers to avoid shared memory issues
+		]
+		print(f'[ORCH] Running: {" ".join(cmd)}')
 		subprocess.run(cmd, check=False)
 
 	if parsed.eval:

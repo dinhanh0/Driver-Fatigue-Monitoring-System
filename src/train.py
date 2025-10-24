@@ -21,6 +21,7 @@ def parse_args():
     ap.add_argument('--num_workers', type=int, default=2)
     ap.add_argument('--use_amp', action='store_true', help='Enable automatic mixed precision if CUDA is available')
     ap.add_argument('--backbone', type=str, default='resnet18', help='Backbone: resnet18 or mobilenet_v2')
+    ap.add_argument('--windows_root', type=str, default=None, help='Root directory for preprocessed windows (auto-detected if not specified)')
     # NAT flags
     ap.add_argument('--use_nat', action='store_true')
     ap.add_argument('--nat_kernel', type=int, default=7)
@@ -45,17 +46,36 @@ def main():
 
     print("[TRAIN] Loading datasets...")
     import pandas as pd
+    from pathlib import Path
     splits_df = pd.read_csv(args.splits_csv)
     print("\nDataset distribution:")
-    dataset_counts = splits_df['relpath'].apply(lambda x: x.split('\\')[2]).value_counts()
-    print(dataset_counts)
+    try:
+        dataset_counts = splits_df['relpath'].apply(lambda x: x.split('\\')[2] if '\\' in x else x.split('/')[2]).value_counts()
+        print(dataset_counts)
+    except Exception:
+        print("Could not parse dataset distribution")
     print("\nLabel distribution:")
-    print(splits_df['label'].value_counts())
+    if 'label' in splits_df.columns:
+        print(splits_df['label'].value_counts())
     print("\n")
     
-    train_ds = ClipDataset(args.splits_csv, args.subset_train, img_size=args.img_size, seq_len=args.seq_len)
+    # Auto-detect windows directory if not specified
+    if args.windows_root is None:
+        base_dir = Path(args.splits_csv).parent
+        # Try to find windows directory (prefer windows_bench_mp)
+        for candidate in ['windows_bench_mp', 'windows_bench_serial', 'windows']:
+            test_path = base_dir / candidate
+            if test_path.exists() and (test_path / args.subset_train).exists():
+                args.windows_root = str(test_path)
+                print(f"[TRAIN] Auto-detected windows directory: {args.windows_root}")
+                break
+        if args.windows_root is None:
+            args.windows_root = str(base_dir / 'windows')
+            print(f"[TRAIN] Using default windows directory: {args.windows_root}")
+    
+    train_ds = ClipDataset(args.splits_csv, args.subset_train, windows_root=args.windows_root, img_size=args.img_size, seq_len=args.seq_len)
     print(f"[TRAIN] Loaded training dataset with {len(train_ds)} samples")
-    val_ds   = ClipDataset(args.splits_csv, args.subset_val,   img_size=args.img_size, seq_len=args.seq_len)
+    val_ds   = ClipDataset(args.splits_csv, args.subset_val, windows_root=args.windows_root, img_size=args.img_size, seq_len=args.seq_len)
     print(f"[TRAIN] Loaded validation dataset with {len(val_ds)} samples")
 
     print("[TRAIN] Creating data loaders...")

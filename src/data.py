@@ -435,7 +435,7 @@ def maybe_standardize(table: pd.DataFrame, do_standardize: bool) -> pd.DataFrame
 
 def run(project_data_dir: Path, do_standardize: bool = False) -> None:
     """End-to-end pipeline that writes one consolidated CSV."""
-    raw_dir = project_data_dir / "raw"
+    raw_dir = project_data_dir / "raw_datasets"
     processed_dir = project_data_dir / "processed"
     processed_dir.mkdir(parents=True, exist_ok=True)
 

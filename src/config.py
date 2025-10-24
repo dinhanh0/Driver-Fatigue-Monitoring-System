@@ -1,7 +1,7 @@
 # Configuration file for paths, seed, and knobs
 
 # Use repo-root relative paths so callers can resolve them consistently
-DATA_RAW_PATH = 'data/raw'
+DATA_RAW_PATH = 'data/raw_datasets'
 DATA_PROCESSED_PATH = 'data/processed'
 SEED = 42
 
