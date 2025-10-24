@@ -248,8 +248,74 @@ PY
 
 ---
 
-## 7) Training (Model‑2: HMGRU + TNA)
 
+## 7) Training
+
+### 7A) Quick smoke test (recommended during development)
+
+Use the lightweight **smoke test** to sanity‑check data loading, padding, class balance, loss wiring, and logging—without running a full training job.
+
+**Run (module form, if the file lives at `src/smoke_test.py`):**
+
+python -m src.smoke_test \
+  --data-root data/processed/windows_sust_nitymed_2s2_128 \
+  --train-split train --val-split val \
+  --pos-label-ids 1 --neg-label-ids 0 \
+  --time-len 60 \
+  --limit-train-per-class 32 \
+  --limit-val-per-class 32 \
+  --weighted-loss --balanced-sampler \
+  --epochs 1 --batch-size 4 --workers 0 \
+  --seed 1337 --progress \
+  --log-file runs/smoke.log
+
+
+**Alternative (script form, if the file is at repo root as `smoke_test.py`):**
+
+python smoke_test.py \
+  --data-root data/processed/windows_sust_nitymed_2s2_128 \
+  --train-split train --val-split val \
+  --pos-label-ids 1 --neg-label-ids 0 \
+  --time-len 60 \
+  --limit-train-per-class 32 \
+  --limit-val-per-class 32 \
+  --weighted-loss --balanced-sampler \
+  --epochs 1 --batch-size 4 --workers 0 \
+  --seed 1337 --progress \
+  --log-file runs/smoke.log
+
+
+**What this does**
+- Picks a **balanced subset** (32 per class for train and val) so each minibatch sees both classes.
+- Applies `--time-len 60` so variable‑length windows are **padded/trimmed** consistently at load time (prevents tensor stacking errors).
+- Uses `--workers 0` for clear error traces during debugging.
+- Enables `--weighted-loss` + `--balanced-sampler` to stabilize training on small, imbalanced samples.
+- Runs **1 epoch** end‑to‑end with logs you can tail in real time:
+  
+  tail -f runs/smoke.log
+  
+
+**Single‑dataset variants**
+- SUST only: change `--data-root` to `data/processed/windows_sust_2s2_128`.
+- NITYMED only: change `--data-root` to `data/processed/windows_nitymed_2s2_128`.
+- DDD (if preprocessed to 0/1): set `--pos-label-ids 1 --neg-label-ids 0` accordingly (or keep original 3/5 when using multi‑id mapping).
+
+**If `smoke_test.py` isn’t available yet**, you can emulate the same behavior with the main trainer:
+
+python -m src.train_model2 \
+  --data-root data/processed/windows_sust_nitymed_2s2_128 \
+  --train-split train --val-split val \
+  --epochs 1 --batch-size 4 --workers 0 \
+  --binary --pos-label-ids 1 --neg-label-ids 0 \
+  --weighted-loss --balanced-sampler \
+  --limit-train-per-class 32 \
+  --limit-val-per-class 32 \
+  --time-len 60 \
+  --seed 1337 --progress \
+  --log-file runs/smoke_emulated.log
+
+
+### 7B) Full training
 High‑level:
 
 
