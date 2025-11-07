@@ -476,6 +476,14 @@ def _orchestrate(args=None):
 	if parsed.build_index or parsed.all:
 		print('[ORCH] Building dataset index...')
 		try:
+			# Download datasets from Kaggle if needed
+			try:
+				from src.data.kaggle_fetch import download_datasets
+				from config import DATA_RAW_PATH
+				download_datasets(DATA_RAW_PATH)
+			except Exception as e:
+				print(f"Could not download datasets: {e}")
+
 			import data
 			data.run(project_data_dir, do_standardize=False)
 		except Exception as e:
