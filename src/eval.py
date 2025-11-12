@@ -50,9 +50,29 @@ def main():
     labels = th.cat(labels_all, dim=0)
     probs = softmax(logits, dim=1)
     metrics = compute_metrics(labels.numpy(), probs.numpy())
-    print("Eval results:")
+    
+    print("\n" + "="*50)
+    print("Evaluation Results:")
+    print("="*50)
     for k, v in metrics.items():
         print(f"  {k}: {v:.4f}")
+    
+    # Show per-class accuracy
+    preds = probs.argmax(dim=1).numpy()
+    y_true = labels.numpy()
+    print("\nPer-class accuracy:")
+    for i in range(args.num_classes):
+        mask = (y_true == i)
+        if mask.sum() > 0:
+            acc = (preds[mask] == i).sum() / mask.sum()
+            print(f"  Class {i}: {acc:.4f} ({mask.sum()} samples)")
+    
+    # Confusion matrix
+    from sklearn.metrics import confusion_matrix
+    cm = confusion_matrix(y_true, preds)
+    print("\nConfusion Matrix:")
+    print(cm)
+    print("="*50)
 
 if __name__ == '__main__':
     main()

@@ -1,0 +1,11 @@
+filename,relpath,split,label
+P1043115_720.mp4,data/raw_datasets/nitymed/DSM_Dataset-HDTV720/Microsleep/Female/HDTV720/P1043115_720.mp4,train,microsleep
+P1042787_720.mp4,data/raw_datasets/nitymed/DSM_Dataset-HDTV720/Microsleep/Female/HDTV720/P1042787_720.mp4,train,microsleep
+P1043114_720.mp4,data/raw_datasets/nitymed/DSM_Dataset-HDTV720/Microsleep/Female/HDTV720/P1043114_720.mp4,train,microsleep
+P1043068_720.mp4,data/raw_datasets/nitymed/DSM_Dataset-HDTV720/Microsleep/Female/HDTV720/P1043068_720.mp4,train,microsleep
+P1043106_720.mp4,data/raw_datasets/nitymed/DSM_Dataset-HDTV720/Microsleep/Female/HDTV720/P1043106_720.mp4,train,microsleep
+P1043089_720.mp4,data/raw_datasets/nitymed/DSM_Dataset-HDTV720/Microsleep/Female/HDTV720/P1043089_720.mp4,train,microsleep
+P1043067_720.mp4,data/raw_datasets/nitymed/DSM_Dataset-HDTV720/Microsleep/Female/HDTV720/P1043067_720.mp4,train,microsleep
+P1043129_720.mp4,data/raw_datasets/nitymed/DSM_Dataset-HDTV720/Microsleep/Female/HDTV720/P1043129_720.mp4,val,microsleep
+P1042757_720.mp4,data/raw_datasets/nitymed/DSM_Dataset-HDTV720/Microsleep/Male/HDTV720/P1042757_720.mp4,val,microsleep
+P1042786_720.mp4,data/raw_datasets/nitymed/DSM_Dataset-HDTV720/Microsleep/Male/HDTV720/P1042786_720.mp4,test,microsleep

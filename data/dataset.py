@@ -36,12 +36,13 @@ class ClipDataset(Dataset):
     """
 
     def __init__(self, splits_csv: str, subset: str = "train", windows_root: str = "data/processed/windows",
-                 img_size: int = 224, seq_len: int = 32, cache_size: int = 0):
+                 img_size: int = 224, seq_len: int = 32, cache_size: int = 0, use_augmentation: bool = False):
         super().__init__()
         self.subset = subset
         self.seq_len = int(seq_len)
         self.img_size = int(img_size)
         self.windows_root = Path(windows_root)
+        self.use_augmentation = use_augmentation and (subset == "train")
         # store paths as plain strings to avoid multiprocessing pickling issues on Windows
         self.windows = [str(p) for p in _list_windows(self.windows_root, self.subset)]
 
@@ -132,6 +133,11 @@ class ClipDataset(Dataset):
         clip_tensor = torch.from_numpy(Xv_clip).float()
         feats_tensor = torch.from_numpy(Xf_clip).float()
         label_tensor = torch.tensor(y, dtype=torch.long)
+
+        # Apply augmentation if enabled
+        if self.use_augmentation:
+            from src.utils.augmentation import augment_clip
+            clip_tensor = augment_clip(clip_tensor, y)
 
         return {"clip": clip_tensor, "feats": feats_tensor, "label": label_tensor, "meta": str(p)}
 

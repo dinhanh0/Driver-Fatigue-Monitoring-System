@@ -1,0 +1,11 @@
+{
+  "microsleep": 0,
+  "yawning": 1,
+  "fatigue": 2,
+  "drowsy": 3,
+  "sleep": 4,
+  "alert": 5,
+  "normal": 5,
+  "distraction": 6,
+  "unknown": 7
+}

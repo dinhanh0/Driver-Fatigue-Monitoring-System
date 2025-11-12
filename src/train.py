@@ -27,6 +27,8 @@ def parse_args():
     ap.add_argument('--nat_kernel', type=int, default=7)
     ap.add_argument('--nat_dilation', type=int, default=1)
     ap.add_argument('--nat_blocks', type=int, default=1)
+    # Training improvements (defaults enabled)
+    ap.add_argument('--patience', type=int, default=15, help='Early stopping patience')
     return ap.parse_args()
 
 def main():
@@ -73,9 +75,9 @@ def main():
             args.windows_root = str(base_dir / 'windows')
             print(f"[TRAIN] Using default windows directory: {args.windows_root}")
     
-    train_ds = ClipDataset(args.splits_csv, args.subset_train, windows_root=args.windows_root, img_size=args.img_size, seq_len=args.seq_len)
-    print(f"[TRAIN] Loaded training dataset with {len(train_ds)} samples")
-    val_ds   = ClipDataset(args.splits_csv, args.subset_val, windows_root=args.windows_root, img_size=args.img_size, seq_len=args.seq_len)
+    train_ds = ClipDataset(args.splits_csv, args.subset_train, windows_root=args.windows_root, img_size=args.img_size, seq_len=args.seq_len, use_augmentation=True)
+    print(f"[TRAIN] Loaded training dataset with {len(train_ds)} samples (augmentation enabled)")
+    val_ds   = ClipDataset(args.splits_csv, args.subset_val, windows_root=args.windows_root, img_size=args.img_size, seq_len=args.seq_len, use_augmentation=False)
     print(f"[TRAIN] Loaded validation dataset with {len(val_ds)} samples")
 
     print("[TRAIN] Creating data loaders...")
@@ -92,10 +94,21 @@ def main():
     
     print("[TRAIN] Setting up optimizer and loss...")
     opt = torch.optim.AdamW(model.parameters(), lr=args.lr)
-    crit = nn.CrossEntropyLoss()
+    
+    # Calculate class weights for imbalanced data
+    labels = [train_ds[i]['label'].item() for i in range(len(train_ds))]
+    counts = torch.bincount(torch.tensor(labels), minlength=args.num_classes).float()
+    weights = 1.0 / (counts + 1e-6)
+    weights = weights / weights.sum() * args.num_classes
+    crit = nn.CrossEntropyLoss(weight=weights.to(device))
+    print(f"[TRAIN] Using class weights: {weights.cpu().numpy()}")
     print(f"[TRAIN] Using AdamW optimizer with lr={args.lr}")
+    
+    # Learning rate scheduler
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(opt, mode='min', factor=0.5, patience=3)
 
     best_f1 = -1.0
+    patience_counter = 0
     tracker = MetricTracker()
 
     use_amp = args.use_amp and device.type == 'cuda'
@@ -145,11 +158,23 @@ def main():
         print(f"Epoch {epoch:02d} | Train loss {tr['train_loss']:.4f} acc {tr['train_acc']:.3f} f1 {tr['train_f1']:.3f} | "
               f"Val loss {tr['val_loss']:.4f} acc {tr['val_acc']:.3f} f1 {tr['val_f1']:.3f}")
 
+        # Learning rate scheduling
+        scheduler.step(tr['val_loss'])
+        print(f"Current LR: {opt.param_groups[0]['lr']:.6f}")
+
         if tr['val_f1'] > best_f1:
             best_f1 = tr['val_f1']
+            patience_counter = 0
             ckpt_path = os.path.join(args.out_dir, 'best.pt')
-            torch.save({'model': model.state_dict(), 'args': vars(args)}, ckpt_path)
+            torch.save({'model': model.state_dict(), 'args': vars(args), 'epoch': epoch}, ckpt_path)
             print(f"Saved best checkpoint → {ckpt_path} (val_f1={best_f1:.3f})")
+        else:
+            patience_counter += 1
+            if patience_counter >= args.patience:
+                print(f"Early stopping triggered at epoch {epoch}")
+                break
+    
+    print(f"\nTraining complete. Best val F1: {best_f1:.3f}")
 
 if __name__ == '__main__':
     main()
