@@ -10,6 +10,48 @@ import pandas as pd
 import cv2
 
 
+def _has_media_files(p: Path) -> bool:
+    """Return True if the path contains any video/image files we care about."""
+    if not p or not Path(p).exists():
+        return False
+    p = Path(p)
+    for pat in VIDEO_PATTERNS + IMAGE_PATTERNS:
+        # rglob handles nested directories
+        for _ in p.rglob(pat):
+            return True
+    return False
+
+
+def find_raw_data_dir(project_data_dir: Path) -> Path:
+    """
+    Locate the directory that actually contains media files.
+    Tries several common locations and returns the first that contains media.
+    """
+    candidates = [
+        project_data_dir / "raw_datasets",
+        project_data_dir / "raw",
+        project_data_dir / "raw_data",
+        project_data_dir / "datasets",
+        project_data_dir.parent / "data" / "raw_datasets",
+        project_data_dir.parent / "data" / "raw",
+        Path("data") / "raw_datasets",
+        Path("data") / "raw",
+    ]
+
+    for c in candidates:
+        if c.exists() and _has_media_files(c):
+            return c
+
+    # As a last resort, try to find any directory under project_data_dir that contains media
+    if project_data_dir.exists():
+        for sub in project_data_dir.iterdir():
+            if sub.is_dir() and _has_media_files(sub):
+                return sub
+
+    # fallback to the canonical location (may be empty)
+    return project_data_dir / "raw_datasets"
+
+
 # General settings (tweakable)
 VIDEO_PATTERNS = ["*.mp4", "*.MP4"]  # video file extensions to scan
 IMAGE_PATTERNS = ["*.jpg", "*.jpeg", "*.png"]  # image file extensions to scan
@@ -435,7 +477,8 @@ def maybe_standardize(table: pd.DataFrame, do_standardize: bool) -> pd.DataFrame
 
 def run(project_data_dir: Path, do_standardize: bool = False) -> None:
     """End-to-end pipeline that writes one consolidated CSV."""
-    raw_dir = project_data_dir / "raw_datasets"
+    raw_dir = find_raw_data_dir(project_data_dir)
+    print(f"Using raw data folder: {raw_dir}")
     processed_dir = project_data_dir / "processed"
     processed_dir.mkdir(parents=True, exist_ok=True)
 
