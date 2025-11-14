@@ -1,6 +1,5 @@
-from pathlib import Path #cleaner file path
-import argparse #used for flagging
-import os 
+import argparse  # used for flagging
+import os
 import random
 
 # To run ffmpeg (used to standadize videos to 25fps, not used here)
@@ -8,6 +7,10 @@ import subprocess
 
 import pandas as pd
 import cv2
+from pathlib import Path
+
+THIS_FILE = Path(__file__).resolve()
+PROJECT_ROOT = THIS_FILE.parents[1]
 
 
 def _has_media_files(p: Path) -> bool:
@@ -61,7 +64,7 @@ RANDOM_SEED = 42  # ensure output result is reproducible
 
 # Standardization policy (flags + optional re-encode)
 TARGET_FPS = 25.0
-TARGET_SHORT_EDGE = 720 #
+TARGET_SHORT_EDGE = 720  #
 STANDARDIZED_DIR = Path("data/processed/videos_std")  # output for re-encoded files
 # ----------------------------------------------------------------
 
@@ -75,9 +78,11 @@ def scan_files(root_dir: Path, patterns: list[str]) -> list[Path]:
     # keep only files (exclude dirs), and sort for determinism
     return sorted([p for p in found if p.is_file()])
 
+
 def scan_videos(videos_root_dir: Path) -> list[Path]:
     """Find all videos under videos_root_dir that match VIDEO_PATTERNS."""
     return scan_files(videos_root_dir, VIDEO_PATTERNS)
+
 
 def scan_images(images_root_dir: Path) -> list[Path]:
     """Find all images under images_root_dir that match IMAGE_PATTERNS."""
@@ -87,14 +92,15 @@ def scan_images(images_root_dir: Path) -> list[Path]:
 # Cache for video metadata to avoid re-reading the same files
 _video_meta_cache = {}
 
+
 def probe_video(video_path: Path) -> dict:
     """Lightweight QC: open with OpenCV and read basic metadata."""
     video_path_str = str(video_path)
-    
+
     # Check cache first
     if video_path_str in _video_meta_cache:
         return _video_meta_cache[video_path_str]
-        
+
     cap = cv2.VideoCapture(video_path_str)      # open a handle to the file
     can_open = cap.isOpened()                    # did OpenCV successfully open it?
 
@@ -128,10 +134,11 @@ def probe_video(video_path: Path) -> dict:
         "height": height,
         "type": "video"
     }
-    
+
     # Cache the result
     _video_meta_cache[video_path_str] = meta.copy()
     return meta
+
 
 def probe_image(image_path: Path) -> dict:
     """Lightweight QC: open with OpenCV and read basic metadata."""
@@ -154,58 +161,85 @@ def probe_image(image_path: Path) -> dict:
     }
 
 
+# =====================================================================
+# BINARY CATEGORY INFERENCE: normal (0) vs impaired (1)
+# =====================================================================
 def infer_category_and_gender(path_str: str) -> tuple[str, str]:
     """
-    Heuristic labels from folder names and filenames:
-    - category: one of known keywords in the path/filename
-    - gender: 'Female'/'Male' if present in path/filename, else 'Unknown'
-    
-    Handles multiple dataset formats:
-    - DSM-Dataset: microsleep/yawning in folders
-    - SUST-DDD: sleep/fatigue/distraction in folders
-    - DriverDrowsiness: drowsy/alert in filenames
+    Binary-only heuristic labels from folder/filenames:
+
+        - 'normal'   = alert / awake / non-drowsy
+        - 'impaired' = drowsy / microsleep / yawning / fatigue / distraction / sleep
+
+    Special handling for SUST Driver Drowsiness Dataset:
+        - d_###.mp4 / d-###.mp4 / d###.mp4 → impaired
+        - n_###.mp4 / n-###.mp4 / n###.mp4 → normal
     """
     path = Path(path_str)
-    parts = path.parts
-    stem = path.stem.lower()  # filename without extension
-    
-    # Combined keywords from all datasets
-    known_categories = {
-        # DSM Dataset
-        "microsleep": "microsleep",
-        "yawning": "yawning",
-        # SUST-DDD
-        "sleep": "sleep",
-        "fatigue": "fatigue",
-        "distraction": "distraction",
-        # Driver Drowsiness Dataset
-        "drowsy": "drowsy",
-        "alert": "alert",
-        # Generic terms
-        "tired": "fatigue",
-        "normal": "alert"
-    }
-    
-    # First check path parts for category
-    for part in parts:
-        part_lower = part.lower()
-        if part_lower in known_categories:
-            category = known_categories[part_lower]
-            break
-    else:
-        # Then check filename for category keywords
-        for keyword, mapping in known_categories.items():
-            if keyword in stem:
-                category = mapping
-                break
-        else:
-            category = "Unknown"
+    stem = path.stem.lower()
+    parts_lower = [p.lower() for p in path.parts]
+    full_lower = path_str.lower()
 
-    # Gender detection
-    lower_parts = [p.lower() for p in parts] + [stem]
-    if any("female" in p for p in lower_parts) or any("f_" == p[:2] for p in lower_parts):
+    # ---------------- SUST Driver Drowsiness Dataset ----------------
+    if "sust driver drowsiness" in full_lower:
+        # d_* = drowsy → impaired
+        if (
+            stem.startswith("d_")
+            or stem.startswith("d-")
+            or (stem.startswith("d") and stem[1:].lstrip("_-").isdigit())
+        ):
+            category = "impaired"
+        # n_* = non-drowsy → normal
+        elif (
+            stem.startswith("n_")
+            or stem.startswith("n-")
+            or (stem.startswith("n") and stem[1:].lstrip("_-").isdigit())
+        ):
+            category = "normal"
+        else:
+            # fallback using folder names
+            if any("non" in p and "drowsiness" in p for p in parts_lower):
+                category = "normal"
+            elif any("drowsiness" in p for p in parts_lower):
+                category = "impaired"
+            else:
+                category = "normal"  # safe default
+    else:
+        # ---------------- Generic DSM / other datasets ----------------
+        impaired_keywords = [
+            "microsleep",
+            "yawn", "yawning",
+            "fatigue", "tired",
+            "sleep",
+            "drowsy", "drowsiness",
+            "distraction",
+        ]
+
+        normal_keywords = [
+            "alert",
+            "normal",
+            "awake",
+            "non_drowsy", "non-drowsy",
+        ]
+
+        # Check folder parts first
+        if any(any(k in part for k in impaired_keywords) for part in parts_lower):
+            category = "impaired"
+        elif any(any(k in part for k in normal_keywords) for part in parts_lower):
+            category = "normal"
+        else:
+            # Then check filename
+            if any(k in stem for k in impaired_keywords):
+                category = "impaired"
+            elif any(k in stem for k in normal_keywords):
+                category = "normal"
+            else:
+                category = "normal"  # conservative default
+
+    # ---------------- Gender detection (unchanged) ----------------
+    if any("female" in p for p in parts_lower) or stem.startswith("f_"):
         gender = "Female"
-    elif any("male" in p for p in lower_parts) or any("m_" == p[:2] for p in lower_parts):
+    elif any("male" in p for p in parts_lower) or stem.startswith("m_"):
         gender = "Male"
     else:
         gender = "Unknown"
@@ -254,29 +288,29 @@ def build_table(raw_data_dir: Path) -> pd.DataFrame:
     - standardization flags
     """
     print(f"Scanning for media files in {raw_data_dir}...")
-    
+
     # Scan both videos and images
     video_paths = scan_videos(raw_data_dir)
     image_paths = scan_images(raw_data_dir)
-    
+
     total_files = len(video_paths) + len(image_paths)
     print(f"Found {len(video_paths)} videos and {len(image_paths)} images")
-    
+
     # Probe every file into a metadata row with progress reporting
     meta_rows = []
-    
+
     print("Processing videos...")
     for i, path in enumerate(video_paths, 1):
         if i % 10 == 0:  # Progress update every 10 files
             print(f"Processing video {i}/{len(video_paths)}")
         meta_rows.append(probe_video(path))
-    
+
     print("Processing images...")
     for i, path in enumerate(image_paths, 1):
         if i % 100 == 0:  # Progress update every 100 files (images are faster)
             print(f"Processing image {i}/{len(image_paths)}")
         meta_rows.append(probe_image(path))
-    
+
     print(f"Creating DataFrame with {len(meta_rows)} total entries...")
     meta_df = pd.DataFrame(meta_rows)
 
@@ -322,7 +356,7 @@ def build_table(raw_data_dir: Path) -> pd.DataFrame:
                 "subject_id": subject_id,
                 "t_start_sec": 0.0,
                 "t_end_sec": float(mrow["duration_sec"]),
-                "label": category,
+                "label": category,   # now only "normal" or "impaired"
             })
         labels_df = pd.DataFrame(inferred)
 
@@ -496,9 +530,16 @@ def run(project_data_dir: Path, do_standardize: bool = False) -> None:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--data", default="data", help="project data folder (contains raw/ and processed/)")
-    parser.add_argument("--standardize", action="store_true", help="actually re-encode off-spec videos with ffmpeg")
+    parser.add_argument(
+        "--data",
+        type=Path,
+        default=PROJECT_ROOT / "data",
+        help="project data folder (contains raw/ and processed/)",
+    )
+    parser.add_argument(
+        "--standardize",
+        action="store_true",
+        help="actually re-encode off-spec videos with ffmpeg",
+    )
     args = parser.parse_args()
-    run(Path(args.data), do_standardize=args.standardize)
- 
-
+    run(args.data, do_standardize=args.standardize)
