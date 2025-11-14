@@ -5,6 +5,16 @@ import numpy as np, pandas as pd, cv2
 from tqdm import tqdm
 from typing import Optional, Tuple, List
 
+
+# ------------------------------------------------------------
+# Force project-root-relative paths (fixes working directory issues)
+# ------------------------------------------------------------
+THIS_FILE = Path(__file__).resolve()
+PROJECT_ROOT = THIS_FILE.parents[1]   # parent of src/
+
+DEFAULT_INDEX = PROJECT_ROOT / "data/processed/dataset_index.csv"
+DEFAULT_OUTDIR = PROJECT_ROOT / "data/processed/windows_from_index"
+
 # ---------------------------------------------
 # Feature extractor import (falls back to stub)
 # ---------------------------------------------
@@ -27,23 +37,41 @@ def _windows(n, win, stride):
         i += stride
 
 # ---------------------------------------------
-# Label mapping (string → int) and utility
+# Binary label mapping (0 = normal, 1 = impaired)
 # ---------------------------------------------
 
+# canonical binary mapping (used only for label_mapping.json)
 LABEL_TO_INT = {
-    "microsleep": 0,
-    "yawning": 1,
-    "fatigue": 2,
-    "drowsy": 3,
-    "sleep": 4,
-    "alert": 5,
-    "normal": 5,  # map normal to same as alert
-    "distraction": 6,
-    "unknown": 7,
+    "normal": 0,
+    "impaired": 1,
 }
 
+# what we treat as "normal" vs "impaired" when parsing text labels
+NORMAL_LABELS = {
+    "normal",
+    "alert",
+    "non drowsy",
+    "nondrowsy",
+    "awake",
+    "unknown",
+}
+IMPAIRED_LABELS = {
+    "microsleep",
+    "yawning",
+    "fatigue",
+    "drowsy",
+    "sleep",
+    "tired",
+    "distraction",
+    "drowsiness",
+}
+
+# we treat truly-unknown as normal by default
+UNKNOWN_LABEL = 0  # 0 = normal
+
+
 def _normalize_label_name(v) -> str:
-    """Normalize free-form labels to a canonical name used by LABEL_TO_INT."""
+    """Normalize free-form labels to a lowercase, space-only string."""
     if v is None:
         return "unknown"
     s = str(v).strip().lower()
@@ -51,21 +79,39 @@ def _normalize_label_name(v) -> str:
     s = s.replace("_", " ").replace("-", " ")
     # collapse repeated whitespace
     s = " ".join(s.split())
-    # synonyms
-    if s in {"non drowsy", "awake", "alert", "normal"}:
-        return "normal"
-    if s in {"drowsy", "sleepy"}:
-        return "drowsy"
     return s
 
 
 def _coerce_label(v) -> int:
+    """
+    Convert any label into 0 (normal) or 1 (impaired).
+
+    - If v is already an int 0/1, keep it.
+    - Otherwise map via text heuristics.
+    """
+    # Already numeric?
     try:
-        # Already an int-like label
-        return int(v)
+        y = int(v)
+        if y in (0, 1):
+            return y
     except Exception:
-        s = _normalize_label_name(v)
-        return LABEL_TO_INT.get(s, LABEL_TO_INT["unknown"])
+        pass
+
+    s = _normalize_label_name(v)
+
+    if s in NORMAL_LABELS:
+        return 0
+    if s in IMPAIRED_LABELS:
+        return 1
+
+    # substring fallbacks
+    if any(k in s for k in ("non drowsy", "awake", "alert", "normal")):
+        return 0
+    if any(k in s for k in ("microsleep", "yawning", "fatigue", "drowsy", "sleep", "tired", "distraction")):
+        return 1
+
+    # default: treat unknown as normal
+    return UNKNOWN_LABEL
 
 # ---------------------------------------------
 # Unified frame source (video file OR image sequence dir)
@@ -131,7 +177,7 @@ def _process_task(task):
     win_len = int(task["win_len"])  # in frames
     stride = int(task["stride"])    # in frames
     segs = task["segs"]              # list of {f_start,f_end,label}
-    default_label = int(task.get("default_label", LABEL_TO_INT["unknown"]))
+    default_label = int(task.get("default_label", UNKNOWN_LABEL))
     img_size = int(task.get("img_size", 224))
     sample_rate = int(task.get("sample_rate", 1))
     out_dir = Path(task["out_dir"])
@@ -197,7 +243,7 @@ def _process_task(task):
                 lbl = _coerce_label(seg.get("label"))
                 overlaps.append((ov, lbl))
             if overlaps and max(ov for ov, _ in overlaps) > 0:
-                y = max(overlaps)[1]
+                y = max(overlaps)[1]  # still 0 or 1
 
         final_dim = int(feat_dim or _FEAT_DIM)
         if any(len(f) != final_dim for f in Xf):
@@ -211,7 +257,7 @@ def _process_task(task):
             save_dir / f"win_{s}_{e}.npz",
             X_video=_np.stack(Xv),
             X_feats=_np.stack(Xf),
-            y=int(y),
+            y=int(y),          # 0 or 1
             start=s,
             end=e,
             fps=fps,
@@ -278,20 +324,18 @@ def build_windows(index_csv: Path, out_dir: Path, win_sec: float, stride_sec: fl
         except Exception:
             pass
     # Ensure a usable split column
-    # If the CSV has no explicit 'split', fall back to 'split_hint' when present; else default everything to 'train'.
     if "split" not in df.columns:
         if "split_hint" in df.columns:
             df["split"] = df["split_hint"].fillna("train").astype(str)
         else:
             df["split"] = "train"
 
-    # Persist label mapping for training code
+    # Persist label mapping for training code: just binary
     with open(out_dir / "label_mapping.json", "w") as f:
-        json.dump(LABEL_TO_INT, f, indent=2)
+        json.dump({"normal": 0, "impaired": 1}, f, indent=2)
 
     # Normalize paths into common columns: key (unique id), media_type, open_path, fps, label
     if ("media_type" in df.columns) or ("video_path" in df.columns) or ("images_dir" in df.columns):  # New/mixed index style
-        # Prepare candidate columns safely
         vp = df["video_path"] if "video_path" in df.columns else pd.Series(pd.NA, index=df.index)
         idirs = df["images_dir"] if "images_dir" in df.columns else pd.Series(pd.NA, index=df.index)
 
@@ -314,16 +358,13 @@ def build_windows(index_csv: Path, out_dir: Path, win_sec: float, stride_sec: fl
         # Ensure fps numeric
         df["fps"] = pd.to_numeric(df.get("fps", 25.0), errors="coerce").fillna(25.0)
 
-        # Default label per file
+        # Default label per file (already 0/1 in new CSV, but handle text too)
         df["default_label"] = df.get("label", None).apply(_coerce_label)
 
-        # Segments (optional): expect f_start/f_end/label rows if present
         key_col = "key"
     else:  # Legacy/minimal index style (relpath/std_relpath/filename)
-        # Build soft defaults for possibly-missing columns
         std = df["standardize"] if "standardize" in df.columns else pd.Series(False, index=df.index)
         std_rel = df["std_relpath"] if "std_relpath" in df.columns else pd.Series(pd.NA, index=df.index)
-        # Prefer `relpath`; fall back to a `path` column if present; else empty
         if "relpath" in df.columns:
             rel = df["relpath"]
         elif "path" in df.columns:
@@ -331,11 +372,9 @@ def build_windows(index_csv: Path, out_dir: Path, win_sec: float, stride_sec: fl
         else:
             rel = pd.Series("", index=df.index)
 
-        # Choose standardized path when available, otherwise rel/path, and finally filename
         open_path = np.where((std == True) & (std_rel.notna()), std_rel, rel)
         if "filename" in df.columns:
-            # Fill remaining empties with filename
-            open_path = pd.Series(open_path).fillna(df["filename"])  # ensure Series for fillna
+            open_path = pd.Series(open_path).fillna(df["filename"])
         df["open_path"] = open_path
 
         df["media_type"] = "video"
@@ -357,11 +396,30 @@ def build_windows(index_csv: Path, out_dir: Path, win_sec: float, stride_sec: fl
         intervals = {}
 
     # Build tasks per (split, key)
+    import random
     groups = list(df.groupby(["split", "key"], sort=False))
+
+    def _is_video_key(key):
+        k = str(key).lower()
+        return k.endswith(".mp4") or k.endswith(".mov") or k.endswith(".avi") or k.endswith(".mkv")
+
+    video_groups = []
+    image_groups = []
+
+    for (split, key), rows in groups:
+        if _is_video_key(key):
+            video_groups.append(((split, key), rows))
+        else:
+            image_groups.append(((split, key), rows))
+
+    random.shuffle(video_groups)
+    random.shuffle(image_groups)
+    groups = video_groups + image_groups
+
     print(f"Preprocessing {len(groups)} (split, key) groups; sample_rate={sample_rate}; max_files={max_files}")
 
     tasks = []
-    for (split, key), rows in groups:
+    for ((split, key), rows) in groups:
         if max_files is not None and len(tasks) >= max_files:
             break
         row0 = rows.iloc[0]
@@ -381,15 +439,16 @@ def build_windows(index_csv: Path, out_dir: Path, win_sec: float, stride_sec: fl
                 })
             except Exception:
                 segs.append({"f_start": 0, "f_end": 0, "label": "unknown"})
-        # Default label from CSV (after normalization)
-        def_label = int(row0.get("default_label", LABEL_TO_INT["unknown"]))
-        # If still unknown, fall back to hints in the path (helps datasets like DDD)
-        if def_label == LABEL_TO_INT["unknown"]:
+        # Default label from CSV (after normalization to 0/1)
+        def_label = int(row0.get("default_label", UNKNOWN_LABEL))
+
+        # If still unknown-like, fall back to hints in the path
+        if def_label == UNKNOWN_LABEL:
             pl = str(path).lower().replace("_", " ").replace("-", " ")
             if any(k in pl for k in ("non drowsy", "awake", "alert", "normal")):
-                def_label = LABEL_TO_INT["normal"]
-            elif any(k in pl for k in ("drowsy", "sleep")):
-                def_label = LABEL_TO_INT["drowsy"]
+                def_label = 0
+            elif any(k in pl for k in ("drowsy", "sleep", "tired", "fatigue", "microsleep", "yawning")):
+                def_label = 1
 
         tasks.append({
             "split": split,
@@ -453,8 +512,9 @@ if __name__ == "__main__":
     from pathlib import Path as _Path
 
     parser = argparse.ArgumentParser(description="Build sliding-window NPZs from an index CSV (videos and/or image folders)")
-    parser.add_argument("--index-csv", type=_Path, default=_Path("data/processed/dataset_index.csv"), help="Path to combined index CSV (default: data/processed/dataset_index.csv)")
-    parser.add_argument("--out-dir", type=_Path, default=_Path("data/processed/windows_from_index"), help="Output directory for window NPZ files (default: data/processed/windows_from_index)")
+    parser.add_argument("--index-csv", type=_Path, default=DEFAULT_INDEX)
+    parser.add_argument("--out-dir", type=_Path, default=DEFAULT_OUTDIR)
+
     parser.add_argument("--win-sec", type=float, default=4.0, help="Window length in seconds (default: 4.0)")
     parser.add_argument("--stride-sec", type=float, default=1.0, help="Stride in seconds (default: 1.0)")
     parser.add_argument("--img-size", type=int, default=224, help="Square image size (default: 224)")
@@ -464,7 +524,6 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    # Informative print for defaults
     print(f"Using index CSV: {args.index_csv}")
     print(f"Writing windows to: {args.out_dir}")
 
