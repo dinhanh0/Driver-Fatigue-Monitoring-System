@@ -1,1 +1,1 @@
-m
+resnet18lstm.pt was too big for file upload on github. To generate the model, simply run preprocess.py, train.py, and eval.py locally with the raw datasets
