@@ -5,7 +5,6 @@ import numpy as np, pandas as pd, cv2
 from tqdm import tqdm
 from typing import Optional, Tuple, List
 
-
 # ------------------------------------------------------------
 # Force project-root-relative paths (fixes working directory issues)
 # ------------------------------------------------------------
@@ -19,17 +18,24 @@ DEFAULT_OUTDIR = PROJECT_ROOT / "data/processed/windows_from_index"
 # Feature extractor import (falls back to stub)
 # ---------------------------------------------
 try:
+    # Preferred: package-style import (python -m src.preprocess)
     from .features import process_frame, FEAT_DIM  # FEAT_DIM should be an int, e.g., 4
-except Exception:  # features not implemented yet
-    FEAT_DIM = 4
-    def process_frame(frame_bgr, out_size=224):
-        # Temporary stub: return None so preprocessing still runs and fills zeros.
-        return None
+except Exception:
+    try:
+        # Fallback: script-style import (python src/preprocess.py)
+        from features import process_frame, FEAT_DIM
+    except Exception:
+        # Last resort: stub that returns None (will produce zero windows)
+        FEAT_DIM = 4
+
+        def process_frame(frame_bgr, out_size=224):
+            # Temporary stub: return None so preprocessing still runs and fills zeros.
+            # For REAL training you absolutely want the real features.py to be imported.
+            return None
 
 # ---------------------------------------------
 # Sliding window helper
 # ---------------------------------------------
-
 def _windows(n, win, stride):
     i = 0
     while i + win <= n:
@@ -55,6 +61,7 @@ NORMAL_LABELS = {
     "awake",
     "unknown",
 }
+
 IMPAIRED_LABELS = {
     "microsleep",
     "yawning",
@@ -64,10 +71,11 @@ IMPAIRED_LABELS = {
     "tired",
     "distraction",
     "drowsiness",
+    "impaired",  # <-- explicitly treat "impaired" as impaired
 }
 
-# we treat truly-unknown as normal by default
-UNKNOWN_LABEL = 0  # 0 = normal
+# use a sentinel for truly-unknown so we can distinguish it from normal
+UNKNOWN_LABEL = -1  # will later be coerced to 0/1 via path hints or fallback
 
 
 def _normalize_label_name(v) -> str:
@@ -88,6 +96,7 @@ def _coerce_label(v) -> int:
 
     - If v is already an int 0/1, keep it.
     - Otherwise map via text heuristics.
+    - If we truly cannot decide, return UNKNOWN_LABEL (handled later).
     """
     # Already numeric?
     try:
@@ -107,10 +116,23 @@ def _coerce_label(v) -> int:
     # substring fallbacks
     if any(k in s for k in ("non drowsy", "awake", "alert", "normal")):
         return 0
-    if any(k in s for k in ("microsleep", "yawning", "fatigue", "drowsy", "sleep", "tired", "distraction")):
+    if any(
+        k in s
+        for k in (
+            "microsleep",
+            "yawning",
+            "fatigue",
+            "drowsy",
+            "sleep",
+            "tired",
+            "distraction",
+            "drowsiness",
+            "impaired",
+        )
+    ):
         return 1
 
-    # default: treat unknown as normal
+    # default: truly unknown; handled later using path-based hints
     return UNKNOWN_LABEL
 
 # ---------------------------------------------
@@ -155,7 +177,6 @@ class FrameSource:
 # ---------------------------------------------
 # Worker that processes windows for ONE media item
 # ---------------------------------------------
-
 def _process_task(task):
     import time as _time
     import numpy as _np
@@ -165,9 +186,12 @@ def _process_task(task):
     try:
         from .features import process_frame as _process_frame, FEAT_DIM as _FEAT_DIM
     except Exception:
-        def _process_frame(x, out_size=224):
-            return None
-        _FEAT_DIM = 4
+        try:
+            from features import process_frame as _process_frame, FEAT_DIM as _FEAT_DIM
+        except Exception:
+            def _process_frame(x, out_size=224):
+                return None
+            _FEAT_DIM = 4
 
     split = task["split"]
     key = task["key"]  # unique identifier (filename/video_path/images_dir)
@@ -176,7 +200,7 @@ def _process_task(task):
     fps = float(task["fps"]) if task.get("fps") is not None else 25.0
     win_len = int(task["win_len"])  # in frames
     stride = int(task["stride"])    # in frames
-    segs = task["segs"]              # list of {f_start,f_end,label}
+    segs = task["segs"]             # list of {f_start,f_end,label}
     default_label = int(task.get("default_label", UNKNOWN_LABEL))
     img_size = int(task.get("img_size", 224))
     sample_rate = int(task.get("sample_rate", 1))
@@ -194,9 +218,16 @@ def _process_task(task):
     # If requested, skip this item if all expected window files already exist
     if skip_existing:
         expected_pairs = list(_windows(n_frames, win_len, stride))
-        if save_dir.exists() and all((save_dir / f"win_{s}_{e}.npz").exists() for (s, e) in expected_pairs):
+        if save_dir.exists() and all(
+            (save_dir / f"win_{s}_{e}.npz").exists() for (s, e) in expected_pairs
+        ):
             src.release()
-            return {"path": path, "time": _time.time() - start_time, "processed": 0, "skipped": True}
+            return {
+                "path": path,
+                "time": _time.time() - start_time,
+                "processed": 0,
+                "skipped": True,
+            }
 
     processed_windows = 0
     for s, e in _windows(n_frames, win_len, stride):
@@ -209,14 +240,18 @@ def _process_task(task):
             if not ok or frame is None:
                 # keep timing with zeros
                 Xv.append(_np.zeros((3, img_size, img_size), dtype="float32"))
-                Xf.append(_np.zeros((feat_dim or _FEAT_DIM,), dtype="float32"))
+                Xf.append(
+                    _np.zeros((feat_dim or _FEAT_DIM,), dtype="float32")
+                )
                 frame_idx += sample_rate
                 continue
 
             out = _process_frame(frame, out_size=img_size)
             if out is None:
                 Xv.append(_np.zeros((3, img_size, img_size), dtype="float32"))
-                Xf.append(_np.zeros((feat_dim or _FEAT_DIM,), dtype="float32"))
+                Xf.append(
+                    _np.zeros((feat_dim or _FEAT_DIM,), dtype="float32")
+                )
             else:
                 img, feats = out
                 if feat_dim is None:
@@ -225,7 +260,11 @@ def _process_task(task):
                     if int(_np.asarray(feats).shape[0]) != feat_dim:
                         if int(_np.asarray(feats).shape[0]) < feat_dim:
                             pad = feat_dim - int(_np.asarray(feats).shape[0])
-                            feats = _np.pad(_np.asarray(feats, dtype="float32"), (0, pad), mode="constant")
+                            feats = _np.pad(
+                                _np.asarray(feats, dtype="float32"),
+                                (0, pad),
+                                mode="constant",
+                            )
                         else:
                             feats = _np.asarray(feats, dtype="float32")[:feat_dim]
                 Xv.append(img)
@@ -243,12 +282,26 @@ def _process_task(task):
                 lbl = _coerce_label(seg.get("label"))
                 overlaps.append((ov, lbl))
             if overlaps and max(ov for ov, _ in overlaps) > 0:
-                y = max(overlaps)[1]  # still 0 or 1
+                # max by overlap; label is already 0/1 or UNKNOWN_LABEL
+                ov, lbl = max(overlaps)
+                if lbl == UNKNOWN_LABEL:
+                    # if segment label is unknown, fall back to y (default_label)
+                    pass
+                else:
+                    y = int(lbl)
+
+        # If y is still UNKNOWN_LABEL (e.g., no usable labels), treat as normal
+        if y == UNKNOWN_LABEL:
+            y = 0
 
         final_dim = int(feat_dim or _FEAT_DIM)
         if any(len(f) != final_dim for f in Xf):
             Xf = [
-                _np.pad(_np.asarray(f, dtype="float32"), (0, max(0, final_dim - len(f))), mode="constant")[:final_dim]
+                _np.pad(
+                    _np.asarray(f, dtype="float32"),
+                    (0, max(0, final_dim - len(f))),
+                    mode="constant",
+                )[:final_dim]
                 for f in Xf
             ]
 
@@ -268,15 +321,25 @@ def _process_task(task):
         processed_windows += 1
 
     src.release()
-    return {"path": path, "time": _time.time() - start_time, "processed": processed_windows}
+    return {
+        "path": path,
+        "time": _time.time() - start_time,
+        "processed": processed_windows,
+    }
 
 # ---------------------------------------------
 # Public API: build_windows
 # ---------------------------------------------
-
-def build_windows(index_csv: Path, out_dir: Path, win_sec: float, stride_sec: float,
-                  img_size: int = 224, sample_rate: int = 1, max_files: Optional[int] = None,
-                  skip_existing: bool = False):
+def build_windows(
+    index_csv: Path,
+    out_dir: Path,
+    win_sec: float,
+    stride_sec: float,
+    img_size: int = 224,
+    sample_rate: int = 1,
+    max_files: Optional[int] = None,
+    skip_existing: bool = False,
+):
     """Build sliding-window .npz files from a mixed media (video or images) index.
 
     Args:
@@ -296,8 +359,8 @@ def build_windows(index_csv: Path, out_dir: Path, win_sec: float, stride_sec: fl
         print(f"Loaded index CSV from: {Path(index_csv).resolve()}")
     except Exception:
         print(f"Loaded index CSV from: {index_csv}")
-    print("Index shape:", getattr(df, 'shape', None))
-    print("Index columns:", list(df.columns) if hasattr(df, 'columns') else None)
+    print("Index shape:", getattr(df, "shape", None))
+    print("Index columns:", list(df.columns) if hasattr(df, "columns") else None)
     if df.shape[0] > 0:
         try:
             print("Index sample rows:\n", df.head(3).to_string(index=False))
@@ -308,13 +371,13 @@ def build_windows(index_csv: Path, out_dir: Path, win_sec: float, stride_sec: fl
         # Try to locate another non-empty dataset_index.csv in the workspace
         try:
             cwd = Path.cwd()
-            candidates = list(cwd.rglob('dataset_index.csv'))
+            candidates = list(cwd.rglob("dataset_index.csv"))
             for c in candidates:
                 if Path(c).resolve() == Path(index_csv).resolve():
                     continue
                 try:
                     df2 = pd.read_csv(c)
-                    if getattr(df2, 'shape', (0,))[0] > 0:
+                    if getattr(df2, "shape", (0,))[0] > 0:
                         print(f"Found non-empty index at {c}; switching to that file")
                         df = df2
                         index_csv = c
@@ -323,6 +386,7 @@ def build_windows(index_csv: Path, out_dir: Path, win_sec: float, stride_sec: fl
                     continue
         except Exception:
             pass
+
     # Ensure a usable split column
     if "split" not in df.columns:
         if "split_hint" in df.columns:
@@ -335,7 +399,9 @@ def build_windows(index_csv: Path, out_dir: Path, win_sec: float, stride_sec: fl
         json.dump({"normal": 0, "impaired": 1}, f, indent=2)
 
     # Normalize paths into common columns: key (unique id), media_type, open_path, fps, label
-    if ("media_type" in df.columns) or ("video_path" in df.columns) or ("images_dir" in df.columns):  # New/mixed index style
+    if ("media_type" in df.columns) or ("video_path" in df.columns) or (
+        "images_dir" in df.columns
+    ):  # New/mixed index style
         vp = df["video_path"] if "video_path" in df.columns else pd.Series(pd.NA, index=df.index)
         idirs = df["images_dir"] if "images_dir" in df.columns else pd.Series(pd.NA, index=df.index)
 
@@ -387,7 +453,8 @@ def build_windows(index_csv: Path, out_dir: Path, win_sec: float, stride_sec: fl
     lab_cols = [c for c in [key_col, "f_start", "f_end", "label"] if c in df.columns]
     if len(lab_cols) == 4:
         intervals = (
-            df[lab_cols].dropna()
+            df[lab_cols]
+            .dropna()
             .groupby(key_col)[["f_start", "f_end", "label"]]
             .apply(lambda g: g.sort_values("f_start").to_dict("records"))
             .to_dict()
@@ -397,6 +464,7 @@ def build_windows(index_csv: Path, out_dir: Path, win_sec: float, stride_sec: fl
 
     # Build tasks per (split, key)
     import random
+
     groups = list(df.groupby(["split", "key"], sort=False))
 
     def _is_video_key(key):
@@ -416,7 +484,10 @@ def build_windows(index_csv: Path, out_dir: Path, win_sec: float, stride_sec: fl
     random.shuffle(image_groups)
     groups = video_groups + image_groups
 
-    print(f"Preprocessing {len(groups)} (split, key) groups; sample_rate={sample_rate}; max_files={max_files}")
+    print(
+        f"Preprocessing {len(groups)} (split, key) groups; "
+        f"sample_rate={sample_rate}; max_files={max_files}"
+    )
 
     tasks = []
     for ((split, key), rows) in groups:
@@ -432,14 +503,16 @@ def build_windows(index_csv: Path, out_dir: Path, win_sec: float, stride_sec: fl
         segs = []
         for s in raw_segs:
             try:
-                segs.append({
-                    "f_start": int(s.get("f_start", 0)),
-                    "f_end": int(s.get("f_end", 0)),
-                    "label": s.get("label", "unknown"),
-                })
+                segs.append(
+                    {
+                        "f_start": int(s.get("f_start", 0)),
+                        "f_end": int(s.get("f_end", 0)),
+                        "label": s.get("label", "unknown"),
+                    }
+                )
             except Exception:
                 segs.append({"f_start": 0, "f_end": 0, "label": "unknown"})
-        # Default label from CSV (after normalization to 0/1)
+        # Default label from CSV (after normalization to 0/1 or UNKNOWN_LABEL)
         def_label = int(row0.get("default_label", UNKNOWN_LABEL))
 
         # If still unknown-like, fall back to hints in the path
@@ -447,30 +520,48 @@ def build_windows(index_csv: Path, out_dir: Path, win_sec: float, stride_sec: fl
             pl = str(path).lower().replace("_", " ").replace("-", " ")
             if any(k in pl for k in ("non drowsy", "awake", "alert", "normal")):
                 def_label = 0
-            elif any(k in pl for k in ("drowsy", "sleep", "tired", "fatigue", "microsleep", "yawning")):
+            elif any(
+                k in pl
+                for k in (
+                    "drowsy",
+                    "drowsiness",
+                    "sleep",
+                    "tired",
+                    "fatigue",
+                    "microsleep",
+                    "yawning",
+                    "impaired",
+                )
+            ):
                 def_label = 1
+            else:
+                # final fallback: treat unknown as normal
+                def_label = 0
 
-        tasks.append({
-            "split": split,
-            "key": key,
-            "media_type": media_type,
-            "path": path,
-            "fps": fps,
-            "win_len": win_len,
-            "stride": stride,
-            "segs": segs,
-            "default_label": def_label,
-            "img_size": int(img_size),
-            "sample_rate": int(sample_rate),
-            "out_dir": str(out_dir),
-            "skip_existing": bool(skip_existing),
-        })
+        tasks.append(
+            {
+                "split": split,
+                "key": key,
+                "media_type": media_type,
+                "path": path,
+                "fps": fps,
+                "win_len": win_len,
+                "stride": stride,
+                "segs": segs,
+                "default_label": def_label,
+                "img_size": int(img_size),
+                "sample_rate": int(sample_rate),
+                "out_dir": str(out_dir),
+                "skip_existing": bool(skip_existing),
+            }
+        )
 
     # Run (optionally parallel)
     workers = int(os.environ.get("PREPROCESS_WORKERS", "0"))
     results = []
     if workers and workers > 1:
         import multiprocessing as _mp
+
         print(f"Running preprocessing with {workers} worker processes...")
         with _mp.Pool(processes=workers) as pool:
             for res in tqdm(
@@ -496,13 +587,12 @@ def build_windows(index_csv: Path, out_dir: Path, win_sec: float, stride_sec: fl
     # Report slow tasks
     slow = sorted(
         [r for r in results if r and r.get("time", 0) > 5.0],
-        key=lambda x: -x["time"]
+        key=lambda x: -x["time"],
     )[:10]
     if slow:
         print("Top slow tasks:")
         for t in slow:
             print(f" - {t['path']}: {t['time']:.2f}s (windows={t['processed']})")
-
 
 # ---------------------------------------------
 # CLI Entrypoint
@@ -511,16 +601,35 @@ if __name__ == "__main__":
     import argparse
     from pathlib import Path as _Path
 
-    parser = argparse.ArgumentParser(description="Build sliding-window NPZs from an index CSV (videos and/or image folders)")
+    parser = argparse.ArgumentParser(
+        description="Build sliding-window NPZs from an index CSV (videos and/or image folders)"
+    )
     parser.add_argument("--index-csv", type=_Path, default=DEFAULT_INDEX)
     parser.add_argument("--out-dir", type=_Path, default=DEFAULT_OUTDIR)
 
-    parser.add_argument("--win-sec", type=float, default=4.0, help="Window length in seconds (default: 4.0)")
-    parser.add_argument("--stride-sec", type=float, default=1.0, help="Stride in seconds (default: 1.0)")
-    parser.add_argument("--img-size", type=int, default=224, help="Square image size (default: 224)")
-    parser.add_argument("--sample-rate", type=int, default=1, help="Frame sampling step (default: 1)")
-    parser.add_argument("--max-files", type=int, default=None, help="Optional cap on number of (split,key) groups to process")
-    parser.add_argument("--skip-existing", action="store_true", help="Skip a group if all its expected window files already exist")
+    parser.add_argument(
+        "--win-sec", type=float, default=2.0, help="Window length in seconds (default: 2.0)"
+    )
+    parser.add_argument(
+        "--stride-sec", type=float, default=2.0, help="Stride in seconds (default: 2.0)"
+    )
+    parser.add_argument(
+        "--img-size", type=int, default=224, help="Square image size (default: 224)"
+    )
+    parser.add_argument(
+        "--sample-rate", type=int, default=1, help="Frame sampling step (default: 1)"
+    )
+    parser.add_argument(
+        "--max-files",
+        type=int,
+        default=None,
+        help="Optional cap on number of (split,key) groups to process",
+    )
+    parser.add_argument(
+        "--skip-existing",
+        action="store_true",
+        help="Skip a group if all its expected window files already exist",
+    )
 
     args = parser.parse_args()
 
