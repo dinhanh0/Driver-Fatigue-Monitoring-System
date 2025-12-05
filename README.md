@@ -1,3 +1,14 @@
+TLDR of how to run model 1 on visual studio code:
+1. pip install everything in requirement.txt file
+2. Download and and extract the datasets into the raw_datasets folder
+ - SUST-DDD (https://www.kaggle.com/datasets/esrakavalci/sust-ddd) and NITYMED (https://www.kaggle.com/datasets/nikospetrellis/nitymed) datasets, can be found on Kaggle
+3. Run data.py (this will build the dataset index file (dataset_index.csv)
+5. Run preprocessing.py 
+6. Run train.py
+7. Run eval.py
+8. For visual Demo,run visual_demo.py.
+   - each of these run will randomly select a file in the test split of the preprocessed windows.
+
 ## 1) Setup
 
 
