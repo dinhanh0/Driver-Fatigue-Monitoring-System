@@ -12,6 +12,7 @@ except ImportError:
 
 import numpy as np
 import random
+import json
 
 from src.datasets.windows_dataset import WindowsNPZDataset
 from src.models.model2_hmgru_tna import HMGRU_TNA
@@ -25,9 +26,13 @@ def _to_tensor_contig(x):
         return torch.as_tensor(x).contiguous()
     return torch.tensor(x).contiguous()
 
-def make_collate_fn(target_T: int | None = None):
-    import torch, numpy as _np
-    def _pad_trim_time(t: torch.Tensor, T: int):
+# --- Picklable collate: class-based to support multiprocessing workers on macOS (spawn)
+class CollatePadTrim:
+    def __init__(self, target_T: int | None = None):
+        self.target_T = target_T
+
+    @staticmethod
+    def _pad_trim_time(t: torch.Tensor, T: int) -> torch.Tensor:
         # t: [T, ...]
         cur = t.shape[0]
         if cur == T:
@@ -38,24 +43,28 @@ def make_collate_fn(target_T: int | None = None):
         pad = t.new_zeros(pad_shape)
         return torch.cat([t, pad], dim=0).contiguous()
 
-    def _collate(batch):
+    def __call__(self, batch):
         # batch: list of dicts with keys: video [T,3,H,W], feats [T,D], label int
         vids  = [_to_tensor_contig(b["video"]) for b in batch]
         feats = [_to_tensor_contig(b["feats"]) for b in batch]
         labels = torch.as_tensor([int(b["label"]) for b in batch], dtype=torch.long)
 
-        T = target_T
+        # Decide temporal length for this batch
+        T = self.target_T
         if T is None:
             Ts = [v.shape[0] for v in vids]
-            T = int(_np.median(Ts)) if len(Ts) else 1
+            T = int(np.median(Ts)) if len(Ts) else 1
 
-        vids  = [_pad_trim_time(v, T) for v in vids]
-        feats = [_pad_trim_time(f, T) for f in feats]
+        vids  = [self._pad_trim_time(v, T) for v in vids]
+        feats = [self._pad_trim_time(f, T) for f in feats]
 
         xV = torch.stack(vids,  dim=0)  # [B,T,3,H,W]
         xF = torch.stack(feats, dim=0)  # [B,T,D]
         return {"video": xV, "feats": xF, "label": labels}
-    return _collate
+
+def make_collate_fn(target_T: int | None = None):
+    # Return a picklable callable for DataLoader workers
+    return CollatePadTrim(target_T)
 
 def get_device():
     if torch.cuda.is_available():
@@ -172,6 +181,49 @@ def make_weighted_sampler_for_split(data_root: str, split: str, id_remap: dict |
         replacement=True,
     )
     return sampler, counts, len(sample_w)
+
+# --- Helper functions for effective class counts in stratified subsets ---
+def _get_file_list_for_split(data_root: str, split: str):
+    """
+    Return the dataset's file list in the same order as WindowsNPZDataset would,
+    falling back to a filesystem scan if needed.
+    """
+    file_list = []
+    try:
+        _tmp_ds = WindowsNPZDataset(data_root, split, limit=None)
+        file_list = getattr(_tmp_ds, "files", None) or []
+    except Exception:
+        file_list = []
+    if not file_list:
+        root = os.path.join(data_root, split)
+        for dirpath, _, filenames in os.walk(root):
+            for fn in filenames:
+                if fn.endswith(".npz"):
+                    file_list.append(os.path.join(dirpath, fn))
+        file_list.sort()
+    return file_list
+
+def count_labels_for_indices(data_root: str, split: str, indices, id_remap: dict | None, num_classes: int):
+    """
+    Count labels for a specific index subset of a split, using the dataset's file order.
+    Applies optional id_remap and returns a length-`num_classes` list of counts.
+    """
+    files = _get_file_list_for_split(data_root, split)
+    counts = [0] * num_classes
+    for idx in indices or []:
+        if 0 <= idx < len(files):
+            try:
+                with np.load(files[idx]) as z:
+                    y = int(z["y"])
+            except Exception:
+                continue
+            if id_remap is not None:
+                y = id_remap.get(y, None)
+                if y is None:
+                    continue
+            if 0 <= y < num_classes:
+                counts[y] += 1
+    return counts
 def make_stratified_indices(data_root: str, split: str, per_class: int, id_remap: dict | None, num_classes: int):
     """
     Build a stratified subset by taking up to `per_class` samples for each class
@@ -238,6 +290,12 @@ def main():
     ap.add_argument("--freeze-backbone-epochs", type=int, default=1, help="initial epochs to freeze CNN")
     ap.add_argument("--progress", action="store_true", help="show per-batch tqdm progress bars")
     ap.add_argument("--log-file", type=str, default=None, help="optional path to append logs (also prints to console)")
+    ap.add_argument("--progress-to-log", type=int, default=0,
+                    help="If >0, write a plain-text progress line to the log every N batches (train/val).")
+    ap.add_argument("--run-tag", type=str, default=None,
+                    help="Optional tag to prefix checkpoint filenames, e.g., 'ddd', 'sust_nity', 'all3'. If not given, uses basename of --data-root.")
+    ap.add_argument("--log-to-file-only", action="store_true",
+                    help="If set, suppress console logging (except tqdm bars) and write logs only to --log-file.")
     ap.add_argument("--binary", action="store_true", help="Enable binary label remap (e.g., for DDD).")
     ap.add_argument("--pos-label-ids", type=str, default="3", help="Comma-separated original class ids to map to POSITIVE=1 when --binary.")
     ap.add_argument("--neg-label-ids", type=str, default="5", help="Comma-separated original class ids to map to NEGATIVE=0 when --binary.")
@@ -263,7 +321,18 @@ def main():
                     help="Debug: cap TRAIN to at most N samples per class (after binary remap).")
     ap.add_argument("--limit-val-per-class", type=int, default=None,
                     help="Debug: cap VAL to at most N samples per class (after binary remap).")
+    ap.add_argument("--resume", type=str, default=None, help="Path to a FULL checkpoint to resume training from.")
     args = ap.parse_args()
+
+    # Build a run tag to avoid checkpoint overwrites across datasets
+    if args.run_tag and len(args.run_tag.strip()) > 0:
+        _tag = "".join(c if (c.isalnum() or c in "-._") else "_" for c in args.run_tag.strip())
+    else:
+        _tag = os.path.basename(args.data_root.rstrip("/"))
+        _tag = "".join(c if (c.isalnum() or c in "-._") else "_" for c in _tag)
+    def _ckpt_path(name: str) -> str:
+        # name like 'model2_hmgru_tna_best.pt'
+        return os.path.join("checkpoints", f"{_tag}_{name}") if _tag else os.path.join("checkpoints", name)
 
     set_seed(args.seed)
 
@@ -291,7 +360,10 @@ def main():
 
     log_f = open(args.log_file, "a", buffering=1) if args.log_file else None
     def log_print(*a, **k):
-        print(*a, **k)
+        # If --log-to-file-only is set, keep console clean (tqdm bars still show),
+        # but continue writing all messages to the log file.
+        if not getattr(args, "log_to_file_only", False):
+            print(*a, **k)
         if log_f is not None:
             print(*a, **k, file=log_f)
             log_f.flush()
@@ -302,6 +374,8 @@ def main():
 
     device = get_device()
     log_print(f"Using device: {device}")
+    if not getattr(args, "resume", None):
+        log_print("Starting a fresh run (no --resume).")
 
     train_labels_raw = scan_labels_npz(args.data_root, args.train_split)
     val_labels_raw   = scan_labels_npz(args.data_root, args.val_split)
@@ -362,6 +436,14 @@ def main():
                                                   args.limit_val_per_class, id_remap, args.num_classes)
             log_print(f"Using stratified val subset per-class={args.limit_val_per_class} → {len(val_indices)} samples")
 
+    # --- If we're using a stratified subset for TRAIN, recompute class counts from that subset ---
+    effective_train_counts = train_counts
+    if train_indices is not None:
+        effective_train_counts = count_labels_for_indices(
+            args.data_root, args.train_split, train_indices, id_remap, args.num_classes
+        )
+        log_print(f"Effective class counts (train subset): {effective_train_counts}")
+
     collate = make_collate_fn(args.time_len)
     train_ld, val_ld = build_loaders(args.data_root, args.train_split, args.val_split,
                                      args.batch_size, args.workers, limit_for_builders,
@@ -373,16 +455,45 @@ def main():
     model = HMGRU_TNA(num_classes=args.num_classes, feat_dim=4)  # 4 = EAR/MAR/BLUR/ILLUM
     model.to(device)
 
-    freeze(model.backbone, True)
+    # --- Resume & freeze bootstrap ---
+    start_epoch = 1
+    best_metric = -1.0
+    no_improve = 0
+    backbone_frozen = True
+    resume_loaded = False
+    ckpt = None
+    best_epoch = 0
+    best_val_acc = 0.0
+    early_stopped = False
+    stop_epoch = None
+    if getattr(args, "resume", None):
+        try:
+            ckpt = torch.load(args.resume, map_location=device)
+            model.load_state_dict(ckpt["model"])
+            start_epoch = int(ckpt.get("epoch", 0)) + 1
+            best_metric = float(ckpt.get("best_metric", -1.0))
+            no_improve = int(ckpt.get("no_improve", 0))
+            backbone_frozen = bool(ckpt.get("backbone_frozen", start_epoch <= args.freeze_backbone_epochs))
+            log_print(f"Resuming from {args.resume} at epoch {start_epoch} (best_metric={best_metric:.3f})")
+            resume_loaded = True
+        except Exception as e:
+            log_print(f"WARNING: Failed to resume from {args.resume}: {e}")
+    # Set backbone freeze state based on resume or schedule
+    if start_epoch <= args.freeze_backbone_epochs:
+        backbone_frozen = True if ckpt is None else backbone_frozen
+    else:
+        backbone_frozen = False if ckpt is None else backbone_frozen
+    freeze(model.backbone, backbone_frozen)
 
     if args.weighted_loss:
         K = args.num_classes
-        n_total = max(1, sum(train_counts))
+        counts_for_weights = effective_train_counts  # uses subset counts if a stratified subset is active
+        n_total = max(1, sum(counts_for_weights))
         w = []
-        for n_c in train_counts:
+        for n_c in counts_for_weights:
             w.append(n_total / (K * max(1, n_c)))
         w = torch.tensor(w, dtype=torch.float32, device=device)
-        log_print(f"Using weighted CE loss with weights: {w.detach().cpu().numpy().round(4).tolist()}")
+        log_print(f"Using weighted CE loss with weights (from {'subset' if train_indices is not None else 'full train'} counts): {w.detach().cpu().numpy().round(4).tolist()}")
         criterion = nn.CrossEntropyLoss(weight=w)
     else:
         criterion = nn.CrossEntropyLoss()
@@ -394,23 +505,35 @@ def main():
     )
     scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=3, gamma=0.5)
 
-    best_metric = -1.0
+    # If resuming, restore optimizer/scheduler states when available
+    if resume_loaded and ckpt is not None:
+        if "optimizer" in ckpt:
+            try:
+                optimizer.load_state_dict(ckpt["optimizer"])
+            except Exception as e:
+                log_print(f"WARNING: could not load optimizer state: {e}")
+        if "scheduler" in ckpt:
+            try:
+                scheduler.load_state_dict(ckpt["scheduler"])
+            except Exception as e:
+                log_print(f"WARNING: could not load scheduler state: {e}")
+
     os.makedirs("checkpoints", exist_ok=True)
 
-    no_improve = 0
-
-    for epoch in range(1, args.epochs+1):
+    for epoch in range(start_epoch, args.epochs+1):
         t0 = time.time()
-        if epoch == args.freeze_backbone_epochs + 1:
+        if backbone_frozen and epoch == args.freeze_backbone_epochs + 1:
             freeze(model.backbone, False)
+            backbone_frozen = False
+            # Rebuild optimizer to include newly-trainable params (matches original behavior)
             optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
             scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=3, gamma=0.5)
             log_print("Unfroze backbone.")
 
         model.train()
         tr_loss, tr_acc, n = 0.0, 0.0, 0
-        train_iter = train_ld if not progress_ok else tqdm(train_ld, total=len(train_ld), desc=f"Train {epoch:02d}/{args.epochs}", leave=False)
-        for batch in train_iter:
+        train_iter = train_ld if not progress_ok else tqdm(train_ld, total=len(train_ld), desc=f"Train {epoch:02d}/{args.epochs}", leave=True)
+        for i, batch in enumerate(train_iter, 1):
             Xv = batch["video"].to(device)   # [B,T,3,224,224]
             Xf = batch["feats"].to(device)   # [B,T,D]
             y  = batch["label"].to(device)
@@ -431,6 +554,9 @@ def main():
             if progress_ok:
                 train_iter.set_postfix(loss=f"{loss.item():.4f}")
 
+            if log_f is not None and args.progress_to_log and (i % args.progress_to_log == 0 or i == len(train_ld)):
+                log_print(f"[Train {epoch:02d}] step {i}/{len(train_ld)}  loss={loss.item():.4f}")
+
         tr_loss /= n
         tr_acc  /= n
 
@@ -438,9 +564,9 @@ def main():
         model.eval()
         va_loss, va_acc, m = 0.0, 0.0, 0
         y_true_all, y_pred_all = [], []
-        val_iter = val_ld if not progress_ok else tqdm(val_ld, total=len(val_ld), desc=f"Val   {epoch:02d}/{args.epochs}", leave=False)
+        val_iter = val_ld if not progress_ok else tqdm(val_ld, total=len(val_ld), desc=f"Val   {epoch:02d}/{args.epochs}", leave=True)
         with torch.no_grad():
-            for batch in val_iter:
+            for j, batch in enumerate(val_iter, 1):
                 Xv = batch["video"].to(device)
                 Xf = batch["feats"].to(device)
                 y  = batch["label"].to(device)
@@ -457,6 +583,9 @@ def main():
                 preds = logits.argmax(dim=1)
                 y_true_all.extend(y_use.detach().cpu().tolist())
                 y_pred_all.extend(preds.detach().cpu().tolist())
+
+                if log_f is not None and args.progress_to_log and (j % args.progress_to_log == 0 or j == len(val_ld)):
+                    log_print(f"[Val   {epoch:02d}] step {j}/{len(val_ld)}  loss={loss.item():.4f}")
         if m > 0:
             va_loss /= m
             va_acc  /= m
@@ -496,24 +625,79 @@ def main():
         log_print(f"[Epoch {epoch:02d}] {dt:.1f}s  train loss {tr_loss:.4f} acc {tr_acc:.3f}  "
               f"val loss {va_loss:.4f} acc {va_acc:.3f}")
 
+        # Save rolling full-state checkpoint each epoch (for exact resume)
+        last_full = _ckpt_path("model2_hmgru_tna_last_full.pt")
+        torch.save({
+            "model": model.state_dict(),
+            "optimizer": optimizer.state_dict(),
+            "scheduler": scheduler.state_dict(),
+            "epoch": epoch,
+            "val_acc": va_acc,
+            "early_metric": args.early_metric,
+            "best_metric": best_metric,
+            "no_improve": no_improve,
+            "backbone_frozen": backbone_frozen,
+        }, last_full)
+
         improved = (metric_val > (best_metric + args.early_stop_min_delta))
         if improved:
             best_metric = metric_val
+            best_epoch = epoch
+            best_val_acc = va_acc
             no_improve = 0
-            ckpt = f"checkpoints/model2_hmgru_tna_best.pt"
+            ckpt = _ckpt_path("model2_hmgru_tna_best.pt")
             torch.save({"model": model.state_dict(),
                         "epoch": epoch,
                         "val_acc": va_acc,
                         "early_metric": args.early_metric,
                         "best_metric": best_metric}, ckpt)
             log_print(f"  ✔ Saved best checkpoint → {ckpt} ({args.early_metric}={best_metric:.3f}, acc={va_acc:.3f})")
+            # Also save a full-state BEST checkpoint (resume-able)
+            best_full = _ckpt_path("model2_hmgru_tna_best_full.pt")
+            torch.save({
+                "model": model.state_dict(),
+                "optimizer": optimizer.state_dict(),
+                "scheduler": scheduler.state_dict(),
+                "epoch": epoch,
+                "val_acc": va_acc,
+                "early_metric": args.early_metric,
+                "best_metric": best_metric,
+                "no_improve": no_improve,
+                "backbone_frozen": backbone_frozen,
+            }, best_full)
         else:
             no_improve += 1
 
         if args.early_stop_patience and args.early_stop_patience > 0:
             if no_improve >= args.early_stop_patience:
-                log_print(f"Early stopping: no improvement in {args.early_metric} for ≥ {args.early_stop_patience} epochs.")
+                early_stopped = True
+                stop_epoch = epoch
+                log_print(f"EARLY STOPPED at epoch {epoch}: no improvement in {args.early_metric} for ≥ {args.early_stop_patience} epochs. "
+                          f"Best epoch {best_epoch} with {args.early_metric}={best_metric:.3f} (val_acc={best_val_acc:.3f}).")
                 break
+
+    # --- Write a compact run summary JSON for quick inspection ---
+    try:
+        os.makedirs("runs", exist_ok=True)
+        summary = {
+            "run_tag": _tag,
+            "data_root": args.data_root,
+            "train_split": args.train_split,
+            "val_split": args.val_split,
+            "early_metric": args.early_metric,
+            "stopped_early": early_stopped,
+            "stop_epoch": stop_epoch,
+            "best_epoch": best_epoch,
+            "best_metric": float(best_metric),
+            "best_val_acc": float(best_val_acc),
+            "epochs_planned": args.epochs,
+            "epochs_completed": epoch
+        }
+        with open(os.path.join("runs", f"{_tag}_summary.json"), "w") as sf:
+            json.dump(summary, sf, indent=2)
+        log_print(f"Saved run summary → runs/{_tag}_summary.json")
+    except Exception as e:
+        log_print(f"WARNING: could not write run summary: {e}")
 
     if log_f is not None:
         log_f.close()
