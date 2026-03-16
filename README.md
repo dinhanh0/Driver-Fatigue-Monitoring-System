@@ -1,8 +1,60 @@
+# Driver Fatigue Monitoring System
+
+A deep learning–based driver fatigue detection project that analyzes driver face video sequences to classify whether a driver is in a **normal** or **fatigue / impaired** state.
+
 Originally developed as a team capstone project
 
 This repository contains my contributed/public version
 
 Original private team repository not publicly accessible
+
+## Overview
+
+Driver fatigue is a serious safety issue because reduced alertness can affect reaction time, focus, and decision-making while driving. This project explores **video-based fatigue detection** by combining:
+
+- **spatial visual features** from facial frames
+- **temporal modeling** across frame sequences
+- **handcrafted features** such as:
+  - EAR (Eye Aspect Ratio)
+  - MAR (Mouth Aspect Ratio)
+  - blur
+  - illumination
+
+## Project Structure
+
+```bash
+Driver-Fatigue-Monitoring-System/
+│
+├── data/                       # Raw and processed datasets
+├── models/                     # Saved model checkpoints
+├── src/
+│   ├── config.py
+│   ├── create_subset.py
+│   ├── data.py
+│   ├── eval.py
+│   ├── eval_model2.py
+│   ├── features.py
+│   ├── main.py
+│   ├── model2_sanity.py
+│   ├── preprocess/
+│   ├── preprocess_model2.py
+│   ├── profile_step.py
+│   ├── train.py
+│   ├── train_model2.py
+│   ├── training_logger.py
+│   ├── visual_demo.py
+│   ├── models/
+│   ├── datasets/
+│   ├── splits/
+│   └── utils/
+│
+├── GILBRETH_README.md
+├── gilbreth_setup.sh
+├── gilbreth_train.sh
+├── gilbreth_eval.sh
+├── requirements.txt
+└── README.md
+
 
 I contributed on Model 1 (Resnet 18 + LSTM + NAT), located in Driver-Fatigue-Monitoring-System/src/models/resnet18_lstm.py
 
