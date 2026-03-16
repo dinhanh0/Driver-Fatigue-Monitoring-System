@@ -65,9 +65,9 @@ https://youtu.be/Kb0_bhePFJU
 To run model 1,
 1. Do pip install requirements.txt
 2. Download required datasets from kaggle and place it in Driver-Fatigue-Monitoring-System/data/
-https://www.kaggle.com/datasets/esrakavalci/sust-ddd
-https://www.kaggle.com/datasets/nikospetrellis/nitymed
-3. Within Driver-Fatigue-Monitoring-System/src/
+- https://www.kaggle.com/datasets/esrakavalci/sust-ddd
+- https://www.kaggle.com/datasets/nikospetrellis/nitymed
+4. Within Driver-Fatigue-Monitoring-System/src/
 Run data.py to create dataset index
 Run preprocess.py to preprocess raw videos into windows and labeled data
 Run train.py to train the model
