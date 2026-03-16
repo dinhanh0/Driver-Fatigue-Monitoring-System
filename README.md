@@ -54,7 +54,7 @@ Driver-Fatigue-Monitoring-System/
 ├── gilbreth_eval.sh
 ├── requirements.txt
 └── README.md
-
+```
 
 I contributed on Model 1 (Resnet 18 + LSTM + NAT), located in Driver-Fatigue-Monitoring-System/src/models/resnet18_lstm.py
 
